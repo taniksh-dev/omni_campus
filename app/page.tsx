@@ -1,103 +1,173 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useEffect, useRef, useState } from 'react';
+import { Users, Car, GraduationCap, TrendingUp } from 'lucide-react';
+
+export default function Page() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const bgVideoRef = useRef<HTMLVideoElement>(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  
+
+  useEffect(() => {
+    // Access camera
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'user', width: 1280, height: 720 } 
+        });
+        
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        
+        if (bgVideoRef.current) {
+          bgVideoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error('Camera access error:', err);
+      }
+    };
+
+    startCamera();
+
+    // Update time
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+      if (videoRef.current?.srcObject) {
+        const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+        tracks.forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
+    <>
+      {/* Background Video with Blur */}
+      <div className="absolute inset-0">
+        <video
+          ref={bgVideoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-cover"
         />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+        <div className="absolute inset-0 backdrop-blur-2xl bg-slate-950/40" />
+      </div>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+      {/* Content Overlay */}
+      <div className="relative z-10 p-8 h-full flex flex-col">
+          {/* Top Bar */}
+          <div className="flex gap-4 mb-6">
+            {/* Camera Component */}
+            <div className="relative group flex-[2] min-w-[980px]">
+              <div className="absolute inset-0 bg-gradient-to-br from-blue-500/20 to-purple-600/20 rounded-2xl blur-xl group-hover:blur-2xl transition-all" />
+              <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-2xl p-2 border border-slate-700/50 shadow-2xl">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-[70vh] object-cover rounded-xl"
+                />
+                <div className="absolute top-4 left-4 bg-red-500 w-3 h-3 rounded-full animate-pulse" />
+                <div className="absolute top-4 left-9 text-white text-xs font-semibold bg-black/50 px-2 py-1 rounded">LIVE</div>
+              </div>
+            </div>
+
+            {/* Info Panel */}
+            <div className="flex-none w-[320px] space-y-4">
+              {/* Date, Time & Campus Strength */}
+              <div className="bg-slate-900/80 backdrop-blur-xl rounded-2xl p-5 border border-slate-700/50 shadow-xl">
+                <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+                  <div>
+                    <div className="text-2xl font-bold text-white mb-1 whitespace-nowrap leading-tight">
+                      {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {currentTime.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                    </div>
+                  </div>
+                  <div className="bg-gradient-to-br from-blue-500 to-purple-600 px-4 py-2 rounded-xl w-[120px]">
+                    <div className="text-[10px] text-blue-100 mb-1">Campus Strength</div>
+                    <div className="text-xl font-bold text-white">0</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Recent Detections */}
+              <div className="bg-slate-900/80 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-blue-400" />
+                    Recent Detections
+                  </h3>
+                </div>
+                <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+                  <div className="text-slate-500 text-sm text-center py-4">No detections yet</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Stats Grid */}
+          <div className="grid grid-cols-4 gap-4 mt-auto">
+            <div className="bg-gradient-to-br from-green-500/20 to-green-600/10 backdrop-blur-xl rounded-2xl p-6 border border-green-500/30 shadow-xl hover:shadow-green-500/20 transition-shadow">
+              <div className="flex items-center justify-between mb-3">
+                <GraduationCap className="w-8 h-8 text-green-400" />
+                <div className="text-3xl font-bold text-white">0</div>
+              </div>
+              <div className="text-sm text-slate-300 font-medium">Students Count</div>
+            </div>
+
+            <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/10 backdrop-blur-xl rounded-2xl p-6 border border-blue-500/30 shadow-xl hover:shadow-blue-500/20 transition-shadow">
+              <div className="flex items-center justify-between mb-3">
+                <Users className="w-8 h-8 text-blue-400" />
+                <div className="text-3xl font-bold text-white">0</div>
+              </div>
+              <div className="text-sm text-slate-300 font-medium">Faculty Count</div>
+            </div>
+
+            <div className="bg-gradient-to-br from-yellow-500/20 to-yellow-600/10 backdrop-blur-xl rounded-2xl p-6 border border-yellow-500/30 shadow-xl hover:shadow-yellow-500/20 transition-shadow">
+              <div className="flex items-center justify-between mb-3">
+                <Car className="w-8 h-8 text-yellow-400" />
+                <div className="text-3xl font-bold text-white">0</div>
+              </div>
+              <div className="text-sm text-slate-300 font-medium">Vehicles Count</div>
+            </div>
+
+            <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/10 backdrop-blur-xl rounded-2xl p-6 border border-purple-500/30 shadow-xl hover:shadow-purple-500/20 transition-shadow">
+              <div className="flex items-center justify-between mb-3">
+                <TrendingUp className="w-8 h-8 text-purple-400" />
+                <div className="text-3xl font-bold text-white">0</div>
+              </div>
+              <div className="text-sm text-slate-300 font-medium">Total</div>
+            </div>
+          </div>
+      </div>
+
+      <style jsx>{`
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(30, 41, 59, 0.3);
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: rgba(100, 116, 139, 0.5);
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: rgba(148, 163, 184, 0.7);
+        }
+      `}</style>
+    </>
   );
 }
