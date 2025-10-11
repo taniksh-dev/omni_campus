@@ -1,66 +1,113 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Users, GraduationCap, Plus, UserPlus } from 'lucide-react';
+import AddStudentModal from '../components/train/AddStudentModal';
+import AddFacultyModal from '../components/train/AddFacultyModal';
 
-// Sample data
-const sampleStudents = [
-  {
-    id: 1,
-    image: '/api/placeholder/40/40',
-    name: 'John Doe',
-    enrollment: 'CS2021001',
-    year: '3rd Year',
-    branch: 'Computer Science'
-  },
-  {
-    id: 2,
-    image: '/api/placeholder/40/40',
-    name: 'Jane Smith',
-    enrollment: 'EC2021015',
-    year: '3rd Year',
-    branch: 'Electronics'
-  },
-  {
-    id: 3,
-    image: '/api/placeholder/40/40',
-    name: 'Mike Johnson',
-    enrollment: 'ME2022030',
-    year: '2nd Year',
-    branch: 'Mechanical'
-  }
-];
-
-const sampleFaculty = [
-  {
-    id: 1,
-    image: '/api/placeholder/40/40',
-    name: 'Dr. Sarah Wilson',
-    batch: 'CS Batch 2021-25',
-    branch: 'Computer Science'
-  },
-  {
-    id: 2,
-    image: '/api/placeholder/40/40',
-    name: 'Prof. Robert Brown',
-    batch: 'EC Batch 2021-25',
-    branch: 'Electronics'
-  }
-];
+// Lists will be populated from Supabase on mount
 
 export default function TrainPage() {
-  const [students, setStudents] = useState(sampleStudents);
-  const [faculty, setFaculty] = useState(sampleFaculty);
+  const [students, setStudents] = useState<any[]>([]);
+  const [faculty, setFaculty] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'students' | 'faculty'>('students');
+  const [openStudent, setOpenStudent] = useState(false);
+  const [openFaculty, setOpenFaculty] = useState(false);
 
-  const handleAddStudent = () => {
-    // TODO: Implement add student modal/form
-    console.log('Add student clicked');
+  const handleAddStudent = () => setOpenStudent(true);
+  const handleAddFaculty = () => setOpenFaculty(true);
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [sRes, fRes] = await Promise.all([
+          fetch('/api/train/students', { method: 'GET' }),
+          fetch('/api/train/faculty', { method: 'GET' }),
+        ]);
+        const sJson = await sRes.json();
+        const fJson = await fRes.json();
+        if (sRes.ok && Array.isArray(sJson.students)) {
+          setStudents(
+            sJson.students.map((s: any) => ({
+              id: s.id,
+              image: s.image_url,
+              name: s.name,
+              enrollment: s.enrollment,
+              year: s.year,
+              branch: s.branch,
+            }))
+          );
+        }
+        if (fRes.ok && Array.isArray(fJson.faculty)) {
+          setFaculty(
+            fJson.faculty.map((f: any) => ({
+              id: f.id,
+              image: f.image_url,
+              name: f.name,
+              batch: f.batch,
+              branch: f.branch,
+            }))
+          );
+        }
+      } catch (e) {
+        console.error('Failed to load data', e);
+      }
+    };
+    load();
+  }, []);
+  const submitStudent = async (data: { name: string; enrollment: string; year: string; branch: string; imageFile: File | null; }) => {
+    const fd = new FormData();
+    fd.append('name', data.name);
+    fd.append('enrollment', data.enrollment);
+    fd.append('year', data.year);
+    fd.append('branch', data.branch);
+    if (data.imageFile) fd.append('image', data.imageFile);
+
+    try {
+      const res = await fetch('/api/train/students', { method: 'POST', body: fd });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to save');
+      const s = json.student;
+      setStudents((prev) => [
+        ...prev,
+        {
+          id: s.id ?? (prev.length ? prev[prev.length - 1].id + 1 : 1),
+          image: s.image_url,
+          name: s.name,
+          enrollment: s.enrollment,
+          year: s.year,
+          branch: s.branch,
+        },
+      ]);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const handleAddFaculty = () => {
-    // TODO: Implement add faculty modal/form
-    console.log('Add faculty clicked');
+  const submitFaculty = async (data: { name: string; batch: string; branch: string; imageFile: File | null; }) => {
+    const fd = new FormData();
+    fd.append('name', data.name);
+    fd.append('batch', data.batch);
+    fd.append('branch', data.branch);
+    if (data.imageFile) fd.append('image', data.imageFile);
+
+    try {
+      const res = await fetch('/api/train/faculty', { method: 'POST', body: fd });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to save');
+      const f = json.faculty;
+      setFaculty((prev) => [
+        ...prev,
+        {
+          id: f.id ?? (prev.length ? prev[prev.length - 1].id + 1 : 1),
+          image: f.image_url,
+          name: f.name,
+          batch: f.batch,
+          branch: f.branch,
+        },
+      ]);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   return (
@@ -148,9 +195,18 @@ export default function TrainPage() {
                       className="grid grid-cols-5 gap-4 py-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors rounded-lg px-2"
                     >
                       <div className="flex items-center">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-medium text-sm">
-                          {student.name.split(' ').map(n => n[0]).join('')}
-                        </div>
+                        {student.image ? (
+                          <img src={student.image} alt={student.name} className="w-10 h-10 rounded-full object-cover border border-slate-700/60" />
+                        ) : (
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-medium text-sm">
+                            {student.name
+                              ? student.name
+                                  .split(' ')
+                                  .map((n: string) => n?.[0] ?? '')
+                                  .join('')
+                              : ''}
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center text-white font-medium">
                         {student.name}
@@ -194,9 +250,18 @@ export default function TrainPage() {
                       className="grid grid-cols-4 gap-4 py-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors rounded-lg px-2"
                     >
                       <div className="flex items-center">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center text-white font-medium text-sm">
-                          {member.name.split(' ').map(n => n[0]).join('')}
-                        </div>
+                        {member.image ? (
+                          <img src={member.image} alt={member.name} className="w-10 h-10 rounded-full object-cover border border-slate-700/60" />
+                        ) : (
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center text-white font-medium text-sm">
+                            {member.name
+                              ? member.name
+                                  .split(' ')
+                                  .map((n: string) => n?.[0] ?? '')
+                                  .join('')
+                              : ''}
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center text-white font-medium">
                         {member.name}
@@ -214,6 +279,9 @@ export default function TrainPage() {
             </div>
           )}
         </div>
+        {/* Modals */}
+        <AddStudentModal isOpen={openStudent} onClose={() => setOpenStudent(false)} onSubmit={submitStudent} />
+        <AddFacultyModal isOpen={openFaculty} onClose={() => setOpenFaculty(false)} onSubmit={submitFaculty} />
       </div>
     </>
   );
