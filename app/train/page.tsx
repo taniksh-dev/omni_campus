@@ -217,7 +217,7 @@ export default function TrainPage() {
                   <div className="text-center py-12 text-slate-500">
                     <GraduationCap className="w-12 h-12 mx-auto mb-4 opacity-50" />
                     <p>No students added yet</p>
-                    <p className="text-sm mt-2">Click "Add Student" to get started</p>
+                    <p className="text-sm mt-2">Click &quot;Add Student&quot; to get started</p>
                   </div>
                 ) : (
                   students.map((student) => (
@@ -282,7 +282,7 @@ export default function TrainPage() {
                   <div className="text-center py-12 text-slate-500">
                     <Users className="w-12 h-12 mx-auto mb-4 opacity-50" />
                     <p>No faculty added yet</p>
-                    <p className="text-sm mt-2">Click "Add Faculty" to get started</p>
+                    <p className="text-sm mt-2">Click &quot;Add Faculty&quot; to get started</p>
                   </div>
                 ) : (
                   faculty.map((member) => (
