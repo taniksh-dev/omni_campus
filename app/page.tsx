@@ -18,7 +18,7 @@ export default function Page() {
   const [vehiclesCount, setVehiclesCount] = useState(0);
   const [campusStrength, setCampusStrength] = useState(0);
   const campusStrengthRef = useRef(0);
-  const [recentDetections, setRecentDetections] = useState<{ label: string; time: string }[]>([]);
+  const [recentDetections, setRecentDetections] = useState<{ label: string; time: string; trackId?: number }[]>([]);
   const detectorRef = useRef<ObjectDetector | null>(null);
   const faceDetectorRef = useRef<FaceDetector | null>(null);
   // Face recognition (face-api.js)
@@ -208,26 +208,28 @@ export default function Page() {
             ? `/api/image-proxy?url=${encodeURIComponent(s.image_url)}`
             : s.image_url;
           const img = await faceapi.fetchImage(src);
-          const det = await faceapi
+          const descriptors: Float32Array[] = [];
+          const detTiny = await faceapi
             .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 }))
             .withFaceLandmarks()
             .withFaceDescriptor();
-          if (det?.descriptor) {
-            const lfd = new faceapi.LabeledFaceDescriptors(`${s.name} (Student)`, [det.descriptor]);
+          if (detTiny?.descriptor) {
+            descriptors.push(detTiny.descriptor);
+            console.info('[FaceAPI] Student descriptor built (Tiny):', s.name);
+          }
+          const detSsd = await faceapi
+            .detectSingleFace(img)
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+          if (detSsd?.descriptor) {
+            descriptors.push(detSsd.descriptor);
+            console.info('[FaceAPI] Student descriptor built (SSD):', s.name);
+          }
+          if (descriptors.length > 0) {
+            const lfd = new faceapi.LabeledFaceDescriptors(`${s.name} (Student)`, descriptors);
             labeled.push(lfd);
-            console.info('[FaceAPI] Student descriptor built:', s.name);
           } else {
-            const det2 = await faceapi
-              .detectSingleFace(img)
-              .withFaceLandmarks()
-              .withFaceDescriptor();
-            if (det2?.descriptor) {
-              const lfd = new faceapi.LabeledFaceDescriptors(`${s.name} (Student)`, [det2.descriptor]);
-              labeled.push(lfd);
-              console.info('[FaceAPI] Student descriptor built (SSD):', s.name);
-            } else {
-              console.warn('[FaceAPI] No face found in student image:', s.name);
-            }
+            console.warn('[FaceAPI] No face found in student image:', s.name);
           }
         } catch (e) {
           console.warn('[FaceAPI] Failed student image fetch/detect:', s?.name, e);
@@ -240,33 +242,35 @@ export default function Page() {
             ? `/api/image-proxy?url=${encodeURIComponent(f.image_url)}`
             : f.image_url;
           const img = await faceapi.fetchImage(src);
-          const det = await faceapi
+          const descriptors: Float32Array[] = [];
+          const detTiny = await faceapi
             .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 }))
             .withFaceLandmarks()
             .withFaceDescriptor();
-          if (det?.descriptor) {
-            const lfd = new faceapi.LabeledFaceDescriptors(`${f.name} (Faculty)`, [det.descriptor]);
+          if (detTiny?.descriptor) {
+            descriptors.push(detTiny.descriptor);
+            console.info('[FaceAPI] Faculty descriptor built (Tiny):', f.name);
+          }
+          const detSsd = await faceapi
+            .detectSingleFace(img)
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+          if (detSsd?.descriptor) {
+            descriptors.push(detSsd.descriptor);
+            console.info('[FaceAPI] Faculty descriptor built (SSD):', f.name);
+          }
+          if (descriptors.length > 0) {
+            const lfd = new faceapi.LabeledFaceDescriptors(`${f.name} (Faculty)`, descriptors);
             labeled.push(lfd);
-            console.info('[FaceAPI] Faculty descriptor built:', f.name);
           } else {
-            const det2 = await faceapi
-              .detectSingleFace(img)
-              .withFaceLandmarks()
-              .withFaceDescriptor();
-            if (det2?.descriptor) {
-              const lfd = new faceapi.LabeledFaceDescriptors(`${f.name} (Faculty)`, [det2.descriptor]);
-              labeled.push(lfd);
-              console.info('[FaceAPI] Faculty descriptor built (SSD):', f.name);
-            } else {
-              console.warn('[FaceAPI] No face found in faculty image:', f.name);
-            }
+            console.warn('[FaceAPI] No face found in faculty image:', f.name);
           }
         } catch (e) {
           console.warn('[FaceAPI] Failed faculty image fetch/detect:', f?.name, e);
         }
       }
       labeledDescriptorsRef.current = labeled;
-      faceMatcherRef.current = new faceapi.FaceMatcher(labeled, 0.6);
+      faceMatcherRef.current = new faceapi.FaceMatcher(labeled, 0.55);
       console.info('[FaceAPI] Labeled descriptors:', labeled.length);
       faceApiReadyRef.current = true;
     } catch (e) {
@@ -541,7 +545,7 @@ export default function Page() {
 
                 let srcX: number, srcY: number, srcW: number, srcH: number, cropLabel: string;
                 if (overlappingFace && overlappingFace.i > 0.1) {
-                  const margin = 0.25;
+                  const margin = 0.35;
                   const fb = overlappingFace.fb as any;
                   const mx = Math.floor(fb.x - fb.width * margin);
                   const my = Math.floor(fb.y - fb.height * margin);
@@ -569,9 +573,9 @@ export default function Page() {
                   octx.clearRect(0, 0, w, h);
                   octx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, w, h);
                   console.debug('[FaceAPI] Recognition attempt using', cropLabel, 'src', { srcX, srcY, srcW, srcH });
-                  // Try TinyFaceDetector first for better performance; bump inputSize to 320 for robustness
+                  // Try TinyFaceDetector first; bump inputSize to 416 for higher recall
                   faceapi
-                    .detectSingleFace(off, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+                    .detectSingleFace(off, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 }))
                     .withFaceLandmarks()
                     .withFaceDescriptor()
                     .then((det: any) => {
@@ -603,8 +607,16 @@ export default function Page() {
                             t.pendingMatch = { label: best.label, role, distanceAvg: avg, hits };
                           }
 
-                          if (t.pendingMatch && t.pendingMatch.hits >= 2 && t.pendingMatch.distanceAvg <= 0.6) {
+                          if (t.pendingMatch && t.pendingMatch.hits >= 3 && t.pendingMatch.distanceAvg <= 0.55) {
                             t.identity = { name, role };
+                            // If this track already logged as person IN, upgrade its label to the recognized name
+                            setRecentDetections((prev) =>
+                              prev.map((e) =>
+                                e.trackId === t.id && /^person\b.*IN$/.test(e.label)
+                                  ? { ...e, label: `${t.identity!.name} (${t.identity!.role}) IN` }
+                                  : e
+                              )
+                            );
                           }
                         } else {
                           // Unknown result resets pending to avoid sticky wrong labels
@@ -631,7 +643,7 @@ export default function Page() {
                     ? `${t.identity.name} (${t.identity.role})`
                     : 'person'
                   : 'vehicle';
-              const entry = { label: `${whoLabel} IN`, time: ts };
+              const entry = { label: `${whoLabel} IN`, time: ts, trackId: t.id };
               setRecentDetections((prev) => {
                 const next = [entry, ...prev];
                 return next.slice(0, 20); // increase list capacity
