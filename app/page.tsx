@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Users, Car, GraduationCap, TrendingUp } from 'lucide-react';
-import { FilesetResolver, ObjectDetector, Detection } from '@mediapipe/tasks-vision';
+import { FilesetResolver, ObjectDetector, Detection, FaceDetector } from '@mediapipe/tasks-vision';
 
 export default function Page() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -12,8 +12,11 @@ export default function Page() {
   const [isClient, setIsClient] = useState(false);
   const [peopleCount, setPeopleCount] = useState(0);
   const [vehiclesCount, setVehiclesCount] = useState(0);
+  const [campusStrength, setCampusStrength] = useState(0);
+  const campusStrengthRef = useRef(0);
   const [recentDetections, setRecentDetections] = useState<{ label: string; time: string }[]>([]);
   const detectorRef = useRef<ObjectDetector | null>(null);
+  const faceDetectorRef = useRef<FaceDetector | null>(null);
   const rafRef = useRef<number | null>(null);
   const originalInfoRef = useRef<typeof console.info | null>(null);
   type Track = {
@@ -28,6 +31,15 @@ export default function Page() {
     cy?: number;
     vx?: number;
     vy?: number;
+    // Directional inference fields
+    prevArea?: number;
+    trendUpCount?: number;
+    trendDownCount?: number;
+    direction?: 'in' | 'out';
+    countedDirection?: 'in' | 'out' | null;
+    dirScore?: number; // accumulates evidence towards IN/OUT
+    facingCameraCount?: number; // for person: consecutive face detections
+    lastSignal?: 'in' | 'out' | null; // provisional signal for canvas
   };
   const tracksRef = useRef<Track[]>([]);
   const nextIdRef = useRef(1);
@@ -112,6 +124,19 @@ export default function Page() {
         maxResults: 20,
         runningMode: 'VIDEO',
       });
+      // Initialize face detector for orientation (people only). Fails gracefully.
+      try {
+        faceDetectorRef.current = await FaceDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face/float16/1/blaze_face.tflite',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+        } as any);
+      } catch (fe) {
+        console.warn('FaceDetector unavailable, falling back to motion/scale only.', fe);
+      }
     } catch (e) {
       console.error('Failed to init MediaPipe ObjectDetector:', e);
     }
@@ -186,6 +211,21 @@ export default function Page() {
         detections = result?.detections ?? [];
       } catch (err) {
         // Detector not ready or frame not suitable; skip this iteration
+      }
+
+      // Face detections for current frame (used to infer facing camera)
+      let faceBoxes: Array<{ x: number; y: number; width: number; height: number }> = [];
+      if (faceDetectorRef.current) {
+        try {
+          const faceRes = faceDetectorRef.current.detectForVideo(video, performance.now());
+          const fds = (faceRes as any)?.detections ?? [];
+          faceBoxes = fds
+            .map((d: any) => d.boundingBox)
+            .filter(Boolean)
+            .map((bb: any) => ({ x: bb.originX, y: bb.originY, width: bb.width, height: bb.height }));
+        } catch (_) {
+          // ignore face detector failure
+        }
       }
 
       // Build candidates only for person and vehicles
@@ -296,6 +336,71 @@ export default function Page() {
           t.missed = 0;
           t.consecutiveHits = (t.consecutiveHits ?? 0) + 1;
           if (!t.confirmed && t.consecutiveHits >= 2) t.confirmed = true; // confirm after 2 consecutive hits
+
+          // Fused direction inference
+          const center = { x: (vw || 640) / 2, y: (vh || 480) / 2 };
+          const area = c.bbox.width * c.bbox.height;
+          const prevArea = t.prevArea ?? area;
+          const deltaRatio = (area - prevArea) / Math.max(prevArea, 1);
+          t.prevArea = area;
+
+          const prevCentroid = t.cx !== undefined && t.cy !== undefined ? { x: t.cx, y: t.cy } : centroid(t.bbox);
+          const currCentroid = cC;
+          const prevDist = Math.hypot(prevCentroid.x - center.x, prevCentroid.y - center.y);
+          const currDist = Math.hypot(currCentroid.x - center.x, currCentroid.y - center.y);
+          const distDelta = prevDist - currDist; // >0 means moving towards center
+
+          const AREA_THRESH = 0.03;
+          const DIST_DELTA_THRESH = Math.max(3, Math.min(vw || 640, vh || 480) * 0.002);
+          const distSignal = distDelta > DIST_DELTA_THRESH ? 1 : distDelta < -DIST_DELTA_THRESH ? -1 : 0;
+          const areaSignal = deltaRatio > AREA_THRESH ? 1 : deltaRatio < -AREA_THRESH ? -1 : 0;
+          const inSignal = distSignal > 0 || areaSignal > 0;
+          const outSignal = distSignal < 0 || areaSignal < 0;
+          // Provisional label prefers stronger (radial) cue when available
+          t.lastSignal = distSignal !== 0 ? (distSignal > 0 ? 'in' : 'out') : areaSignal !== 0 ? (areaSignal > 0 ? 'in' : 'out') : null;
+
+          // Face evidence for person
+          let faceEvidence = 0;
+          if (t.type === 'person' && faceBoxes.length > 0) {
+            const hasFace = faceBoxes.some((fb) => iou({ x: fb.x, y: fb.y, width: fb.width, height: fb.height }, t.bbox) > 0.15);
+            if (hasFace) {
+              t.facingCameraCount = (t.facingCameraCount ?? 0) + 1;
+              faceEvidence = 1; // boost towards IN
+            } else {
+              t.facingCameraCount = Math.max(0, (t.facingCameraCount ?? 0) - 0.5);
+            }
+          }
+
+          // Accumulate directional score: radial cue weighted strongest, area medium
+          t.dirScore = (t.dirScore ?? 0) + (distSignal * 1) + (areaSignal * 0.6) + faceEvidence;
+          // mild decay when no signal
+          if (!inSignal && !outSignal && faceEvidence === 0) {
+            t.dirScore = t.dirScore * 0.95;
+          }
+
+          // Decide when confirmed
+          if (!t.direction && t.confirmed) {
+            if ((t.dirScore ?? 0) >= 1.8) t.direction = 'in';
+            else if ((t.dirScore ?? 0) <= -1.8) t.direction = 'out';
+          }
+
+          // Count campus strength once per track when direction becomes known
+          if (t.direction && !t.countedDirection) {
+            if (t.direction === 'in') {
+              campusStrengthRef.current = campusStrengthRef.current + 1;
+              // Log only incoming objects to Recent Detections
+              const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              const entry = { label: `${t.type === 'person' ? 'person' : 'vehicle'} IN`, time: ts };
+              setRecentDetections((prev) => {
+                const next = [entry, ...prev];
+                return next.slice(0, 20); // increase list capacity
+              });
+            } else {
+              campusStrengthRef.current = Math.max(0, campusStrengthRef.current - 1);
+            }
+            t.countedDirection = t.direction;
+            setCampusStrength(campusStrengthRef.current);
+          }
           usedTrackIds.add(t.id);
         } else {
           // Create new track
@@ -314,6 +419,13 @@ export default function Page() {
               cy: candC.y,
               vx: 0,
               vy: 0,
+              prevArea: c.bbox.width * c.bbox.height,
+              trendUpCount: 0,
+              trendDownCount: 0,
+              direction: undefined,
+              countedDirection: null,
+              dirScore: 0,
+              facingCameraCount: 0,
             };
             tracks.push(track);
             newTracks.push(track);
@@ -349,7 +461,11 @@ export default function Page() {
 
           // Draw label background and text
           ctx.font = '12px sans-serif';
-          const text = label;
+          const text = t.direction
+            ? `${label} ${t.direction === 'in' ? 'IN' : 'OUT'}`
+            : t.lastSignal
+            ? `${label} ${t.lastSignal.toUpperCase()}?`
+            : label;
           const textWidth = ctx.measureText(text).width;
           const padX = 6;
           const padY = 4;
@@ -366,24 +482,13 @@ export default function Page() {
 
       // Update counts and recent list
       setPeopleCount(people);
-      setVehiclesCount(vehicles);
-      if (newTracks.length > 0) {
-        setRecentDetections((prev) => {
-          const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          const labels = newTracks
-            .map((t) => (t.type === 'person' ? 'person' : 'vehicle'))
-            .reduce((acc, l) => ({ ...acc, [l]: (acc as any)[l] ? (acc as any)[l] + 1 : 1 }), {} as any);
-          const labelText = `${labels.person ? labels.person : 0} person, ${labels.vehicle ? labels.vehicle : 0} vehicle`;
-          const entry = { label: labelText, time: ts };
-          const next = [entry, ...prev];
-          return next.slice(0, 10);
-        });
-      }
+          setVehiclesCount(vehicles);
+          // Recent detections now logged only on confirmed IN events above
 
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-  };
+          rafRef.current = requestAnimationFrame(loop);
+        };
+        rafRef.current = requestAnimationFrame(loop);
+      };
 
   
 
@@ -436,7 +541,7 @@ export default function Page() {
                   </div>
                   <div className="bg-gradient-to-br from-blue-500 to-purple-600 px-4 py-2 rounded-xl w-[120px]">
                     <div className="text-[10px] text-blue-100 mb-1">Campus Strength</div>
-                    <div className="text-xl font-bold text-white">{peopleCount}</div>
+                    <div className="text-xl font-bold text-white">{campusStrength}</div>
                   </div>
                 </div>
               </div>
@@ -449,7 +554,7 @@ export default function Page() {
                     Recent Detections
                   </h3>
                 </div>
-                <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+                <div className="space-y-2 max-h-72 overflow-y-auto custom-scrollbar">
                   {recentDetections.length === 0 ? (
                     <div className="text-slate-500 text-sm text-center py-4">No detections yet</div>
                   ) : (
