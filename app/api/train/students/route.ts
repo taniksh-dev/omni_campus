@@ -81,3 +81,34 @@ export async function GET() {
     return NextResponse.json({ error: e?.message || 'Server error' }, { status: 500 });
   }
 }
+
+export async function DELETE(req: Request) {
+  try {
+    const url = new URL(req.url);
+    const idStr = url.searchParams.get('id');
+    const id = idStr ? Number(idStr) : NaN;
+
+    if (!id || Number.isNaN(id)) {
+      return NextResponse.json({ error: 'Missing or invalid id' }, { status: 400 });
+    }
+
+    // Allow mock mode or missing Supabase to return success without DB ops
+    const useMock = process.env.USE_MOCK_STORAGE === 'true' || !supabaseServer;
+    if (useMock) {
+      return NextResponse.json({ success: true }, { status: 200 });
+    }
+
+    const { error } = await supabaseServer
+      .from('students')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true }, { status: 200 });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || 'Server error' }, { status: 500 });
+  }
+}

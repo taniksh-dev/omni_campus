@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Users, GraduationCap, Plus, UserPlus } from 'lucide-react';
+import { Users, GraduationCap, Plus, UserPlus, Trash } from 'lucide-react';
 import AddStudentModal from '../components/train/AddStudentModal';
 import AddFacultyModal from '../components/train/AddFacultyModal';
 
@@ -83,6 +83,21 @@ export default function TrainPage() {
     }
   };
 
+  const deleteStudent = async (id: number) => {
+    const confirmed = typeof window !== 'undefined' ? window.confirm('Delete this student?') : true;
+    if (!confirmed) return;
+    try {
+      const res = await fetch(`/api/train/students?id=${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error || 'Failed to delete');
+      }
+      setStudents((prev) => prev.filter((s) => s.id !== id));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const submitFaculty = async (data: { name: string; batch: string; branch: string; imageFile: File | null; }) => {
     const fd = new FormData();
     fd.append('name', data.name);
@@ -105,6 +120,21 @@ export default function TrainPage() {
           branch: f.branch,
         },
       ]);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const deleteFaculty = async (id: number) => {
+    const confirmed = typeof window !== 'undefined' ? window.confirm('Delete this faculty member?') : true;
+    if (!confirmed) return;
+    try {
+      const res = await fetch(`/api/train/faculty?id=${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error || 'Failed to delete');
+      }
+      setFaculty((prev) => prev.filter((f) => f.id !== id));
     } catch (e) {
       console.error(e);
     }
@@ -173,12 +203,13 @@ export default function TrainPage() {
             <div className="p-6">
               <div className="space-y-4">
                 {/* Header Row */}
-                <div className="grid grid-cols-5 gap-4 pb-3 border-b border-slate-700/50 text-sm font-medium text-slate-400">
+                <div className="grid grid-cols-6 gap-4 pb-3 border-b border-slate-700/50 text-sm font-medium text-slate-400">
                   <div>Image</div>
                   <div>Name</div>
                   <div>Enrollment</div>
                   <div>Academic Year</div>
                   <div>Branch</div>
+                  <div>Actions</div>
                 </div>
                 
                 {/* Student Rows */}
@@ -192,7 +223,7 @@ export default function TrainPage() {
                   students.map((student) => (
                     <div
                       key={student.id}
-                      className="grid grid-cols-5 gap-4 py-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors rounded-lg px-2"
+                      className="grid grid-cols-6 gap-4 py-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors rounded-lg px-2"
                     >
                       <div className="flex items-center">
                         {student.image ? (
@@ -220,6 +251,15 @@ export default function TrainPage() {
                       <div className="flex items-center text-slate-300">
                         {student.branch}
                       </div>
+                      <div className="flex items-center">
+                        <button
+                          onClick={() => deleteStudent(student.id)}
+                          className="flex items-center gap-2 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all shadow-lg hover:shadow-red-500/25"
+                        >
+                          <Trash className="w-4 h-4" />
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -229,11 +269,12 @@ export default function TrainPage() {
             <div className="p-6">
               <div className="space-y-4">
                 {/* Header Row */}
-                <div className="grid grid-cols-4 gap-4 pb-3 border-b border-slate-700/50 text-sm font-medium text-slate-400">
+                <div className="grid grid-cols-5 gap-4 pb-3 border-b border-slate-700/50 text-sm font-medium text-slate-400">
                   <div>Image</div>
                   <div>Name</div>
                   <div>Student Batch</div>
                   <div>Branch</div>
+                  <div>Actions</div>
                 </div>
                 
                 {/* Faculty Rows */}
@@ -247,7 +288,7 @@ export default function TrainPage() {
                   faculty.map((member) => (
                     <div
                       key={member.id}
-                      className="grid grid-cols-4 gap-4 py-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors rounded-lg px-2"
+                      className="grid grid-cols-5 gap-4 py-4 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors rounded-lg px-2"
                     >
                       <div className="flex items-center">
                         {member.image ? (
@@ -271,6 +312,15 @@ export default function TrainPage() {
                       </div>
                       <div className="flex items-center text-slate-300">
                         {member.branch}
+                      </div>
+                      <div className="flex items-center">
+                        <button
+                          onClick={() => deleteFaculty(member.id)}
+                          className="flex items-center gap-2 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all shadow-lg hover:shadow-red-500/25"
+                        >
+                          <Trash className="w-4 h-4" />
+                          Delete
+                        </button>
                       </div>
                     </div>
                   ))

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Users, Car, GraduationCap, TrendingUp } from 'lucide-react';
 import { FilesetResolver, ObjectDetector, Detection, FaceDetector } from '@mediapipe/tasks-vision';
+import * as faceapi from 'face-api.js';
 
 export default function Page() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -11,12 +12,20 @@ export default function Page() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isClient, setIsClient] = useState(false);
   const [peopleCount, setPeopleCount] = useState(0);
+  const [studentCount, setStudentCount] = useState(0);
+  const [facultyCount, setFacultyCount] = useState(0);
+  const [unknownPersonCount, setUnknownPersonCount] = useState(0);
   const [vehiclesCount, setVehiclesCount] = useState(0);
   const [campusStrength, setCampusStrength] = useState(0);
   const campusStrengthRef = useRef(0);
   const [recentDetections, setRecentDetections] = useState<{ label: string; time: string }[]>([]);
   const detectorRef = useRef<ObjectDetector | null>(null);
   const faceDetectorRef = useRef<FaceDetector | null>(null);
+  // Face recognition (face-api.js)
+  const faceApiReadyRef = useRef(false);
+  const faceMatcherRef = useRef<any>(null);
+  const labeledDescriptorsRef = useRef<any[]>([]);
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const originalInfoRef = useRef<typeof console.info | null>(null);
   type Track = {
@@ -40,6 +49,11 @@ export default function Page() {
     dirScore?: number; // accumulates evidence towards IN/OUT
     facingCameraCount?: number; // for person: consecutive face detections
     lastSignal?: 'in' | 'out' | null; // provisional signal for canvas
+    // Recognition fields
+    identity?: { name: string; role: 'Student' | 'Faculty' } | null;
+    lastRecognition?: number;
+    recognitionTries?: number;
+    pendingMatch?: { label: string; role: 'Student' | 'Faculty'; distanceAvg: number; hits: number } | undefined;
   };
   const tracksRef = useRef<Track[]>([]);
   const nextIdRef = useRef(1);
@@ -68,6 +82,8 @@ export default function Page() {
         muteXnnpackLogs(3000);
         // Initialize MediaPipe Object Detector once video is ready
         await initDetector();
+        // Initialize face recognition (async, non-blocking)
+        initFaceApi();
         startDetectionLoop();
       } catch (err) {
         console.error('Camera access error:', err);
@@ -142,6 +158,122 @@ export default function Page() {
     }
   };
 
+  // Initialize face-api.js, load models and build labeled descriptors
+  const initFaceApi = async () => {
+    try {
+      // Load models: prefer local /models if present, otherwise CDN
+      const local = '/models';
+      const cdn = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+      let base = cdn;
+      try {
+        const head = await fetch(`${local}/ssd_mobilenetv1_model-weights_manifest.json`, { method: 'HEAD' });
+        if (head.ok) base = local;
+      } catch (_) {}
+      try {
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(base),
+          faceapi.nets.ssdMobilenetv1.loadFromUri(base),
+          faceapi.nets.faceLandmark68Net.loadFromUri(base),
+          faceapi.nets.faceRecognitionNet.loadFromUri(base),
+        ]);
+        console.info('[FaceAPI] Loaded models from', base);
+      } catch (e) {
+        if (base !== cdn) {
+          await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(cdn),
+            faceapi.nets.ssdMobilenetv1.loadFromUri(cdn),
+            faceapi.nets.faceLandmark68Net.loadFromUri(cdn),
+            faceapi.nets.faceRecognitionNet.loadFromUri(cdn),
+          ]);
+          console.info('[FaceAPI] Fallback: Loaded models from CDN');
+        } else {
+          throw e;
+        }
+      }
+
+      // Load students/faculty and build labeled descriptors
+      const [sRes, fRes] = await Promise.all([
+        fetch('/api/train/students', { method: 'GET' }),
+        fetch('/api/train/faculty', { method: 'GET' }),
+      ]);
+      const sJson = await sRes.json().catch(() => ({ students: [] }));
+      const fJson = await fRes.json().catch(() => ({ faculty: [] }));
+      const students = Array.isArray(sJson.students) ? sJson.students : [];
+      const faculty = Array.isArray(fJson.faculty) ? fJson.faculty : [];
+      const labeled: any[] = [];
+      for (const s of students) {
+        if (!s?.image_url || !s?.name) continue;
+        try {
+          const src = /^https?:\/\//.test(s.image_url)
+            ? `/api/image-proxy?url=${encodeURIComponent(s.image_url)}`
+            : s.image_url;
+          const img = await faceapi.fetchImage(src);
+          const det = await faceapi
+            .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 }))
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+          if (det?.descriptor) {
+            const lfd = new faceapi.LabeledFaceDescriptors(`${s.name} (Student)`, [det.descriptor]);
+            labeled.push(lfd);
+            console.info('[FaceAPI] Student descriptor built:', s.name);
+          } else {
+            const det2 = await faceapi
+              .detectSingleFace(img)
+              .withFaceLandmarks()
+              .withFaceDescriptor();
+            if (det2?.descriptor) {
+              const lfd = new faceapi.LabeledFaceDescriptors(`${s.name} (Student)`, [det2.descriptor]);
+              labeled.push(lfd);
+              console.info('[FaceAPI] Student descriptor built (SSD):', s.name);
+            } else {
+              console.warn('[FaceAPI] No face found in student image:', s.name);
+            }
+          }
+        } catch (e) {
+          console.warn('[FaceAPI] Failed student image fetch/detect:', s?.name, e);
+        }
+      }
+      for (const f of faculty) {
+        if (!f?.image_url || !f?.name) continue;
+        try {
+          const src = /^https?:\/\//.test(f.image_url)
+            ? `/api/image-proxy?url=${encodeURIComponent(f.image_url)}`
+            : f.image_url;
+          const img = await faceapi.fetchImage(src);
+          const det = await faceapi
+            .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 }))
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+          if (det?.descriptor) {
+            const lfd = new faceapi.LabeledFaceDescriptors(`${f.name} (Faculty)`, [det.descriptor]);
+            labeled.push(lfd);
+            console.info('[FaceAPI] Faculty descriptor built:', f.name);
+          } else {
+            const det2 = await faceapi
+              .detectSingleFace(img)
+              .withFaceLandmarks()
+              .withFaceDescriptor();
+            if (det2?.descriptor) {
+              const lfd = new faceapi.LabeledFaceDescriptors(`${f.name} (Faculty)`, [det2.descriptor]);
+              labeled.push(lfd);
+              console.info('[FaceAPI] Faculty descriptor built (SSD):', f.name);
+            } else {
+              console.warn('[FaceAPI] No face found in faculty image:', f.name);
+            }
+          }
+        } catch (e) {
+          console.warn('[FaceAPI] Failed faculty image fetch/detect:', f?.name, e);
+        }
+      }
+      labeledDescriptorsRef.current = labeled;
+      faceMatcherRef.current = new faceapi.FaceMatcher(labeled, 0.6);
+      console.info('[FaceAPI] Labeled descriptors:', labeled.length);
+      faceApiReadyRef.current = true;
+    } catch (e) {
+      console.warn('FaceAPI init failed, continuing without recognition.', e);
+    }
+  };
+
   const muteXnnpackLogs = (ms = 3000) => {
     if (originalInfoRef.current) return; // already muted
     originalInfoRef.current = console.info;
@@ -203,6 +335,9 @@ export default function Page() {
       if (vw && vh) {
         if (canvas.width !== vw) canvas.width = vw;
         if (canvas.height !== vh) canvas.height = vh;
+        if (!offscreenCanvasRef.current) {
+          offscreenCanvasRef.current = document.createElement('canvas');
+        }
       }
 
       let detections: Detection[] = [];
@@ -384,13 +519,119 @@ export default function Page() {
             else if ((t.dirScore ?? 0) <= -1.8) t.direction = 'out';
           }
 
+          // Attempt face recognition for person tracks using face-api.js
+          if (
+            t.type === 'person' &&
+            faceApiReadyRef.current &&
+            !t.identity &&
+            ((t.facingCameraCount ?? 0) >= 1 || t.confirmed)
+          ) {
+            const nowMs = Date.now();
+            const last = t.lastRecognition ?? 0;
+            const tries = t.recognitionTries ?? 0;
+            if (nowMs - last > 800 && tries < 5) {
+              t.lastRecognition = nowMs;
+              t.recognitionTries = tries + 1;
+              try {
+                const off = offscreenCanvasRef.current!;
+                // If we have a face box overlapping this track, crop around it; otherwise use upper-half person crop
+                const overlappingFace = faceBoxes
+                  .map((fb) => ({ fb, i: iou({ x: fb.x, y: fb.y, width: fb.width, height: fb.height }, t.bbox) }))
+                  .sort((a, b) => b.i - a.i)[0];
+
+                let srcX: number, srcY: number, srcW: number, srcH: number, cropLabel: string;
+                if (overlappingFace && overlappingFace.i > 0.1) {
+                  const margin = 0.25;
+                  const fb = overlappingFace.fb as any;
+                  const mx = Math.floor(fb.x - fb.width * margin);
+                  const my = Math.floor(fb.y - fb.height * margin);
+                  const mw = Math.floor(fb.width * (1 + margin * 2));
+                  const mh = Math.floor(fb.height * (1 + margin * 2));
+                  srcX = Math.max(0, mx);
+                  srcY = Math.max(0, my);
+                  srcW = Math.max(64, mw);
+                  srcH = Math.max(64, mh);
+                  cropLabel = 'face-box crop';
+                } else {
+                  srcX = Math.max(0, Math.floor(t.bbox.x));
+                  srcY = Math.max(0, Math.floor(t.bbox.y));
+                  srcW = Math.floor(t.bbox.width);
+                  srcH = Math.floor(Math.max(128, t.bbox.height * 0.6));
+                  cropLabel = 'person upper-half';
+                }
+
+                const w = Math.max(128, srcW);
+                const h = Math.max(128, srcH);
+                off.width = w;
+                off.height = h;
+                const octx = off.getContext('2d');
+                if (octx) {
+                  octx.clearRect(0, 0, w, h);
+                  octx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, w, h);
+                  console.debug('[FaceAPI] Recognition attempt using', cropLabel, 'src', { srcX, srcY, srcW, srcH });
+                  // Try TinyFaceDetector first for better performance; bump inputSize to 320 for robustness
+                  faceapi
+                    .detectSingleFace(off, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+                    .withFaceLandmarks()
+                    .withFaceDescriptor()
+                    .then((det: any) => {
+                      if (!det) {
+                        // Fallback to SSD Mobilenet if tiny fails to detect
+                        return faceapi
+                          .detectSingleFace(off)
+                          .withFaceLandmarks()
+                          .withFaceDescriptor();
+                      }
+                      return det;
+                    })
+                    .then((det: any) => {
+                      if (det?.descriptor && faceMatcherRef.current) {
+                        const best = faceMatcherRef.current.findBestMatch(det.descriptor);
+                        const distance = (best as any)?.distance ?? Infinity;
+                        console.debug('[FaceAPI] Match result:', best?.label, 'distance:', distance);
+                        if (best?.label && best.label !== 'unknown') {
+                          const m = /^(.*)\s\((Student|Faculty)\)$/.exec(best.label);
+                          const name = m ? m[1] : best.label;
+                          const role = (m ? m[2] : 'Student') as 'Student' | 'Faculty';
+
+                          // Multi-frame confirmation: require at least 2 consistent hits
+                          if (!t.pendingMatch || t.pendingMatch.label !== best.label) {
+                            t.pendingMatch = { label: best.label, role, distanceAvg: distance, hits: 1 };
+                          } else {
+                            const hits = (t.pendingMatch.hits ?? 0) + 1;
+                            const avg = ((t.pendingMatch.distanceAvg ?? distance) * (hits - 1) + distance) / hits;
+                            t.pendingMatch = { label: best.label, role, distanceAvg: avg, hits };
+                          }
+
+                          if (t.pendingMatch && t.pendingMatch.hits >= 2 && t.pendingMatch.distanceAvg <= 0.6) {
+                            t.identity = { name, role };
+                          }
+                        } else {
+                          // Unknown result resets pending to avoid sticky wrong labels
+                          t.pendingMatch = undefined;
+                        }
+                      }
+                      return det;
+                    })
+                    .catch(() => {});
+                }
+              } catch (_) {}
+            }
+          }
+
           // Count campus strength once per track when direction becomes known
           if (t.direction && !t.countedDirection) {
             if (t.direction === 'in') {
               campusStrengthRef.current = campusStrengthRef.current + 1;
               // Log only incoming objects to Recent Detections
               const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-              const entry = { label: `${t.type === 'person' ? 'person' : 'vehicle'} IN`, time: ts };
+              const whoLabel =
+                t.type === 'person'
+                  ? t.identity
+                    ? `${t.identity.name} (${t.identity.role})`
+                    : 'person'
+                  : 'vehicle';
+              const entry = { label: `${whoLabel} IN`, time: ts };
               setRecentDetections((prev) => {
                 const next = [entry, ...prev];
                 return next.slice(0, 20); // increase list capacity
@@ -447,13 +688,21 @@ export default function Page() {
 
       // Update counts from active tracks
       const people = aliveTracks.filter((t) => t.type === 'person' && t.confirmed).length;
+      const students = aliveTracks.filter((t) => t.type === 'person' && t.confirmed && t.identity?.role === 'Student').length;
+      const faculty = aliveTracks.filter((t) => t.type === 'person' && t.confirmed && t.identity?.role === 'Faculty').length;
+      const unknownPersons = aliveTracks.filter((t) => t.type === 'person' && t.confirmed && !t.identity).length;
       const vehicles = aliveTracks.filter((t) => t.type === 'vehicle' && t.confirmed).length;
 
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         aliveTracks.forEach((t) => {
-          const label = t.type === 'person' ? 'person' : 'vehicle';
+          const baseLabel =
+            t.type === 'person'
+              ? t.identity
+                ? `${t.identity.name} (${t.identity.role})`
+                : 'person'
+              : 'vehicle';
           // Colors: person = blue, vehicle = green
           ctx.strokeStyle = t.type === 'person' ? '#3b82f6' : '#22c55e';
           ctx.lineWidth = 4;
@@ -462,10 +711,10 @@ export default function Page() {
           // Draw label background and text
           ctx.font = '12px sans-serif';
           const text = t.direction
-            ? `${label} ${t.direction === 'in' ? 'IN' : 'OUT'}`
+            ? `${baseLabel} ${t.direction === 'in' ? 'IN' : 'OUT'}`
             : t.lastSignal
-            ? `${label} ${t.lastSignal.toUpperCase()}?`
-            : label;
+            ? `${baseLabel} ${t.lastSignal.toUpperCase()}?`
+            : baseLabel;
           const textWidth = ctx.measureText(text).width;
           const padX = 6;
           const padY = 4;
@@ -482,6 +731,9 @@ export default function Page() {
 
       // Update counts and recent list
       setPeopleCount(people);
+          setStudentCount(students);
+          setFacultyCount(faculty);
+          setUnknownPersonCount(unknownPersons);
           setVehiclesCount(vehicles);
           // Recent detections now logged only on confirmed IN events above
 
@@ -575,7 +827,7 @@ export default function Page() {
             <div className="bg-gradient-to-br from-green-500/20 to-green-600/10 backdrop-blur-xl rounded-2xl p-6 border border-green-500/30 shadow-xl hover:shadow-green-500/20 transition-shadow">
               <div className="flex items-center justify-between mb-3">
                 <GraduationCap className="w-8 h-8 text-green-400" />
-                <div className="text-3xl font-bold text-white">{peopleCount}</div>
+                <div className="text-3xl font-bold text-white">{studentCount}</div>
               </div>
               <div className="text-sm text-slate-300 font-medium">Students Count</div>
             </div>
@@ -583,7 +835,7 @@ export default function Page() {
             <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/10 backdrop-blur-xl rounded-2xl p-6 border border-blue-500/30 shadow-xl hover:shadow-blue-500/20 transition-shadow">
               <div className="flex items-center justify-between mb-3">
                 <Users className="w-8 h-8 text-blue-400" />
-                <div className="text-3xl font-bold text-white">0</div>
+                <div className="text-3xl font-bold text-white">{facultyCount}</div>
               </div>
               <div className="text-sm text-slate-300 font-medium">Faculty Count</div>
             </div>
@@ -599,7 +851,7 @@ export default function Page() {
             <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/10 backdrop-blur-xl rounded-2xl p-6 border border-purple-500/30 shadow-xl hover:shadow-purple-500/20 transition-shadow">
               <div className="flex items-center justify-between mb-3">
                 <TrendingUp className="w-8 h-8 text-purple-400" />
-                <div className="text-3xl font-bold text-white">{peopleCount + vehiclesCount}</div>
+                <div className="text-3xl font-bold text-white">{studentCount + facultyCount + unknownPersonCount + vehiclesCount}</div>
               </div>
               <div className="text-sm text-slate-300 font-medium">Total</div>
             </div>
