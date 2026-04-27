@@ -1,23 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-type DetectionLog = {
-  id: string;
-  type: 'student' | 'faculty' | 'vehicle' | 'unknown';
-  timestamp: string;
-  // Student fields
-  name?: string;
-  enrollment?: string;
-  year?: string;
-  branch?: string;
-  // Faculty fields
-  batch?: string;
-  // Vehicle fields
-  vehicleType?: '2-wheeler' | '4-wheeler' | 'bus';
-};
+import { supabaseServer } from '@/lib/supabaseServer';
 
 export async function GET(request: NextRequest) {
   try {
@@ -25,66 +7,39 @@ export async function GET(request: NextRequest) {
     const date = searchParams.get('date');
     const type = searchParams.get('type');
 
-    // If Supabase is not configured, return empty array
-    if (!supabaseUrl || !supabaseKey) {
-      console.warn('Supabase not configured, returning empty logs');
+    if (!supabaseServer) {
       return NextResponse.json({ logs: [] });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    // For now, return mock data since we don't have actual detection logs table
-    // In a real implementation, you would query your detection_logs table
-    const mockLogs: DetectionLog[] = [
-      {
-        id: '1',
-        type: 'student',
-        name: 'John Doe',
-        enrollment: 'CS2021001',
-        year: '3rd Year',
-        branch: 'Computer Science',
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: '2',
-        type: 'faculty',
-        name: 'Dr. Smith',
-        batch: 'CS Batch 2021',
-        branch: 'Computer Science',
-        timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(), // 30 minutes ago
-      },
-      {
-        id: '3',
-        type: 'vehicle',
-        vehicleType: '2-wheeler',
-        timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(), // 1 hour ago
-      },
-      {
-        id: '4',
-        type: 'unknown',
-        timestamp: new Date(Date.now() - 1000 * 60 * 90).toISOString(), // 1.5 hours ago
-      },
-    ];
+    let query = supabaseServer.from('detection_logs').select('*');
 
     // Filter by date if provided
-    let filteredLogs = mockLogs;
     if (date) {
-      const targetDate = new Date(date);
-      filteredLogs = mockLogs.filter(log => {
-        const logDate = new Date(log.timestamp);
-        return logDate.toDateString() === targetDate.toDateString();
-      });
+      // Create start and end of day in ISO format
+      const startOfDay = `${date}T00:00:00.000Z`;
+      const endOfDay = `${date}T23:59:59.999Z`;
+      query = query.gte('timestamp', startOfDay).lte('timestamp', endOfDay);
     }
 
     // Filter by type if provided and not 'all'
     if (type && type !== 'all') {
-      filteredLogs = filteredLogs.filter(log => log.type === type);
+      query = query.eq('type', type);
     }
 
-    // Sort by timestamp (newest first)
-    filteredLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const { data, error } = await query.order('timestamp', { ascending: false });
 
-    return NextResponse.json({ logs: filteredLogs });
+    if (error) {
+      console.error('Database error fetching logs:', error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    // Map database snake_case to frontend camelCase
+    const mappedLogs = (data || []).map(log => ({
+      ...log,
+      vehicleType: log.vehicle_type,
+    }));
+
+    return NextResponse.json({ logs: mappedLogs });
 
   } catch (error) {
     console.error('Error fetching detection logs:', error);
@@ -95,35 +50,53 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST endpoint for creating detection logs (for future use)
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     
-    // If Supabase is not configured, return error
-    if (!supabaseUrl || !supabaseKey) {
+    if (!supabaseServer) {
       return NextResponse.json(
         { error: 'Database not configured' },
         { status: 500 }
       );
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    // Extract fields and map vehicleType
+    const { 
+      type, 
+      name, 
+      enrollment, 
+      year, 
+      branch, 
+      batch, 
+      vehicleType, 
+      image_url 
+    } = body;
 
-    // In a real implementation, you would insert into detection_logs table
-    // const { data, error } = await supabase
-    //   .from('detection_logs')
-    //   .insert([{
-    //     type: body.type,
-    //     timestamp: new Date().toISOString(),
-    //     ...body
-    //   }])
-    //   .select();
+    const { data, error } = await supabaseServer
+      .from('detection_logs')
+      .insert([{
+        type,
+        name,
+        enrollment,
+        year,
+        branch,
+        batch,
+        vehicle_type: vehicleType,
+        image_url,
+        timestamp: new Date().toISOString()
+      }])
+      .select();
 
-    // For now, just return success
+    if (error) {
+      console.error('Database error creating log:', error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
     return NextResponse.json({ 
       success: true, 
-      message: 'Detection log created successfully' 
+      message: 'Detection log created successfully',
+      log: data?.[0]
     });
 
   } catch (error) {
@@ -133,4 +106,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+}

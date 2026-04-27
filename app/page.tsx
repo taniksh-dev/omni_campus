@@ -25,6 +25,8 @@ export default function Page() {
   const faceApiReadyRef = useRef(false);
   const faceMatcherRef = useRef<any>(null);
   const labeledDescriptorsRef = useRef<any[]>([]);
+  const studentsDataRef = useRef<any[]>([]);
+  const facultyDataRef = useRef<any[]>([]);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const originalInfoRef = useRef<typeof console.info | null>(null);
@@ -200,6 +202,8 @@ export default function Page() {
       const fJson = await fRes.json().catch(() => ({ faculty: [] }));
       const students = Array.isArray(sJson.students) ? sJson.students : [];
       const faculty = Array.isArray(fJson.faculty) ? fJson.faculty : [];
+      studentsDataRef.current = students;
+      facultyDataRef.current = faculty;
       const labeled: any[] = [];
       for (const s of students) {
         if (!s?.image_url || !s?.name) continue;
@@ -318,6 +322,48 @@ export default function Page() {
     x: b.x + b.width / 2,
     y: b.y + b.height / 2,
   });
+
+  const recordLog = async (track: Track, direction: 'in' | 'out') => {
+    try {
+      const logData: any = {
+        type: track.type === 'vehicle' ? 'vehicle' : 'unknown',
+        timestamp: new Date().toISOString(),
+      };
+
+      if (track.type === 'person') {
+        if (track.identity) {
+          logData.type = track.identity.role.toLowerCase();
+          logData.name = track.identity.name;
+          
+          if (track.identity.role === 'Student') {
+            const student = studentsDataRef.current.find(s => s.name === track.identity?.name);
+            if (student) {
+              logData.enrollment = student.enrollment;
+              logData.year = student.year;
+              logData.branch = student.branch;
+            }
+          } else {
+            const faculty = facultyDataRef.current.find(f => f.name === track.identity?.name);
+            if (faculty) {
+              logData.batch = faculty.batch;
+              logData.branch = faculty.branch;
+            }
+          }
+        }
+      } else if (track.type === 'vehicle') {
+        // Find the vehicle type if possible (currently just 'vehicle' label)
+        logData.vehicleType = '4-wheeler'; // Default or based on label if refined
+      }
+
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(logData),
+      });
+    } catch (error) {
+      console.error('Failed to record log:', error);
+    }
+  };
 
   const startDetectionLoop = () => {
     const loop = () => {
@@ -635,7 +681,7 @@ export default function Page() {
           if (t.direction && !t.countedDirection) {
             if (t.direction === 'in') {
               campusStrengthRef.current = campusStrengthRef.current + 1;
-              // Log only incoming objects to Recent Detections
+              // Log only incoming objects to Recent Detections sidebar
               const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
               const whoLabel =
                 t.type === 'person'
@@ -646,11 +692,15 @@ export default function Page() {
               const entry = { label: `${whoLabel} IN`, time: ts, trackId: t.id };
               setRecentDetections((prev) => {
                 const next = [entry, ...prev];
-                return next.slice(0, 20); // increase list capacity
+                return next.slice(0, 20);
               });
             } else {
               campusStrengthRef.current = Math.max(0, campusStrengthRef.current - 1);
             }
+            
+            // Record log to database for both IN and OUT
+            recordLog(t, t.direction);
+            
             t.countedDirection = t.direction;
             setCampusStrength(campusStrengthRef.current);
           }
