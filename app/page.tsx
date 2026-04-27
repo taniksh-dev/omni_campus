@@ -204,81 +204,70 @@ export default function Page() {
       const faculty = Array.isArray(fJson.faculty) ? fJson.faculty : [];
       studentsDataRef.current = students;
       facultyDataRef.current = faculty;
+      
+      console.info(`[FaceAPI] Loaded ${students.length} students and ${faculty.length} faculty from DB.`);
+      
       const labeled: any[] = [];
-      for (const s of students) {
-        if (!s?.image_url || !s?.name) continue;
+      const processItem = async (item: any, role: 'Student' | 'Faculty') => {
+        if (!item?.image_url || !item?.name) return;
         try {
-          const src = /^https?:\/\//.test(s.image_url)
-            ? `/api/image-proxy?url=${encodeURIComponent(s.image_url)}`
-            : s.image_url;
+          const src = /^https?:\/\//.test(item.image_url)
+            ? `/api/image-proxy?url=${encodeURIComponent(item.image_url)}`
+            : item.image_url;
+          
           const img = await faceapi.fetchImage(src);
           const descriptors: Float32Array[] = [];
-          const detTiny = await faceapi
-            .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 }))
-            .withFaceLandmarks()
-            .withFaceDescriptor();
-          if (detTiny?.descriptor) {
-            descriptors.push(detTiny.descriptor);
-            console.info('[FaceAPI] Student descriptor built (Tiny):', s.name);
-          }
+          
+          // Try SSD first for training set as it's more accurate
           const detSsd = await faceapi
             .detectSingleFace(img)
             .withFaceLandmarks()
             .withFaceDescriptor();
+            
           if (detSsd?.descriptor) {
             descriptors.push(detSsd.descriptor);
-            console.info('[FaceAPI] Student descriptor built (SSD):', s.name);
-          }
-          if (descriptors.length > 0) {
-            const lfd = new faceapi.LabeledFaceDescriptors(`${s.name} (Student)`, descriptors);
-            labeled.push(lfd);
+            console.debug(`[FaceAPI] ${role} descriptor built (SSD):`, item.name);
           } else {
-            console.warn('[FaceAPI] No face found in student image:', s.name);
+            // Fallback to Tiny with relaxed settings
+            const detTiny = await faceapi
+              .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.3 }))
+              .withFaceLandmarks()
+              .withFaceDescriptor();
+              
+            if (detTiny?.descriptor) {
+              descriptors.push(detTiny.descriptor);
+              console.debug(`[FaceAPI] ${role} descriptor built (Tiny):`, item.name);
+            }
+          }
+
+          if (descriptors.length > 0) {
+            labeled.push(new faceapi.LabeledFaceDescriptors(`${item.name} (${role})`, descriptors));
+          } else {
+            console.warn(`[FaceAPI] No face found in ${role.toLowerCase()} image:`, item.name);
           }
         } catch (e) {
-          console.warn('[FaceAPI] Failed student image fetch/detect:', s?.name, e);
+          console.warn(`[FaceAPI] Failed ${role.toLowerCase()} process:`, item?.name, e);
         }
+      };
+
+      // Process in small batches to avoid overwhelming the browser/network
+      const allItems = [
+        ...students.map((s: any) => ({ item: s, role: 'Student' as const })),
+        ...faculty.map((f: any) => ({ item: f, role: 'Faculty' as const }))
+      ];
+      
+      for (let i = 0; i < allItems.length; i += 5) {
+        const batch = allItems.slice(i, i + 5);
+        await Promise.all(batch.map(b => processItem(b.item, b.role)));
       }
-      for (const f of faculty) {
-        if (!f?.image_url || !f?.name) continue;
-        try {
-          const src = /^https?:\/\//.test(f.image_url)
-            ? `/api/image-proxy?url=${encodeURIComponent(f.image_url)}`
-            : f.image_url;
-          const img = await faceapi.fetchImage(src);
-          const descriptors: Float32Array[] = [];
-          const detTiny = await faceapi
-            .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 }))
-            .withFaceLandmarks()
-            .withFaceDescriptor();
-          if (detTiny?.descriptor) {
-            descriptors.push(detTiny.descriptor);
-            console.info('[FaceAPI] Faculty descriptor built (Tiny):', f.name);
-          }
-          const detSsd = await faceapi
-            .detectSingleFace(img)
-            .withFaceLandmarks()
-            .withFaceDescriptor();
-          if (detSsd?.descriptor) {
-            descriptors.push(detSsd.descriptor);
-            console.info('[FaceAPI] Faculty descriptor built (SSD):', f.name);
-          }
-          if (descriptors.length > 0) {
-            const lfd = new faceapi.LabeledFaceDescriptors(`${f.name} (Faculty)`, descriptors);
-            labeled.push(lfd);
-          } else {
-            console.warn('[FaceAPI] No face found in faculty image:', f.name);
-          }
-        } catch (e) {
-          console.warn('[FaceAPI] Failed faculty image fetch/detect:', f?.name, e);
-        }
-      }
+
       labeledDescriptorsRef.current = labeled;
-      faceMatcherRef.current = new faceapi.FaceMatcher(labeled, 0.55);
-      console.info('[FaceAPI] Labeled descriptors:', labeled.length);
+      // Use 0.6 distance threshold for SSD-based descriptors (standard for face-api.js)
+      faceMatcherRef.current = new faceapi.FaceMatcher(labeled, 0.6);
+      console.info('[FaceAPI] Recognition system ready. Total labeled subjects:', labeled.length);
       faceApiReadyRef.current = true;
     } catch (e) {
-      console.warn('FaceAPI init failed, continuing without recognition.', e);
+      console.error('FaceAPI init failed critical error:', e);
     }
   };
 
@@ -653,7 +642,8 @@ export default function Page() {
                             t.pendingMatch = { label: best.label, role, distanceAvg: avg, hits };
                           }
 
-                          if (t.pendingMatch && t.pendingMatch.hits >= 3 && t.pendingMatch.distanceAvg <= 0.55) {
+                          // Require 2 consistent hits (reduced from 3) for faster detection
+                          if (t.pendingMatch && t.pendingMatch.hits >= 2 && t.pendingMatch.distanceAvg <= 0.6) {
                             t.identity = { name, role };
                             // If this track already logged as person IN, upgrade its label to the recognized name
                             setRecentDetections((prev) =>

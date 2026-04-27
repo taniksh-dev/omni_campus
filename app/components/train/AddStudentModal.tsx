@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import * as faceapi from 'face-api.js';
+import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 type StudentForm = {
   name: string;
@@ -28,9 +30,28 @@ export default function AddStudentModal({
     imageFile: null,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isCheckingFace, setIsCheckingFace] = useState(false);
+  const [faceDetected, setFaceDetected] = useState<boolean | null>(null);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
 
   const academicYears = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
   const branches = ['Computer Science', 'Electronics', 'Mechanical', 'Civil', 'Information Technology'];
+
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const base = '/models';
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(base),
+          faceapi.nets.ssdMobilenetv1.loadFromUri(base),
+        ]);
+        setModelsLoaded(true);
+      } catch (e) {
+        console.error('Failed to load face-api models in modal:', e);
+      }
+    };
+    loadModels();
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -43,6 +64,30 @@ export default function AddStudentModal({
     }
   }, [isOpen, onClose]);
 
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setForm({ ...form, imageFile: file });
+    setFaceDetected(null);
+    setErrors((prev) => ({ ...prev, imageFile: '' }));
+
+    if (file && file.type.startsWith('image/')) {
+      setIsCheckingFace(true);
+      try {
+        const img = await faceapi.bufferToImage(file);
+        // Use SSD for better accuracy in validation
+        const detection = await faceapi.detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }));
+        setFaceDetected(!!detection);
+        if (!detection) {
+          setErrors((prev) => ({ ...prev, imageFile: 'No clear face detected in this image. Please use a clear portrait.' }));
+        }
+      } catch (err) {
+        console.error('Face detection error:', err);
+      } finally {
+        setIsCheckingFace(false);
+      }
+    }
+  };
+
   const validate = () => {
     const next: Record<string, string> = {};
     if (!form.name.trim()) next.name = 'Student name is required';
@@ -52,6 +97,8 @@ export default function AddStudentModal({
     if (!form.imageFile) next.imageFile = 'Upload a student image';
     else if (!form.imageFile.type.startsWith('image/')) next.imageFile = 'File must be an image';
     else if (form.imageFile.size > 5 * 1024 * 1024) next.imageFile = 'Image must be under 5MB';
+    else if (faceDetected === false) next.imageFile = 'No face detected. Please upload a clear photo.';
+    
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -61,8 +108,13 @@ export default function AddStudentModal({
     if (!validate()) return;
     onSubmit(form);
     onClose();
+    resetForm();
+  };
+
+  const resetForm = () => {
     setForm({ name: '', enrollment: '', year: '', branch: '', imageFile: null });
     setErrors({});
+    setFaceDetected(null);
   };
 
   if (!isOpen) return null;
@@ -156,15 +208,37 @@ export default function AddStudentModal({
 
           <div>
             <label className="block text-sm text-slate-300 mb-1" htmlFor="student-image">Student Image</label>
-            <input
-              id="student-image"
-              type="file"
-              accept="image/*"
-              className="w-full rounded-xl bg-slate-800/60 border border-slate-700/60 text-white px-3 py-2 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-700"
-              onChange={(e) => setForm({ ...form, imageFile: e.target.files?.[0] ?? null })}
-              aria-invalid={!!errors.imageFile}
-              aria-describedby={errors.imageFile ? 'student-image-error' : undefined}
-            />
+            <div className="relative">
+              <input
+                id="student-image"
+                type="file"
+                accept="image/*"
+                className="w-full rounded-xl bg-slate-800/60 border border-slate-700/60 text-white px-3 py-2 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-700"
+                onChange={handleImageChange}
+                aria-invalid={!!errors.imageFile}
+                aria-describedby={errors.imageFile ? 'student-image-error' : undefined}
+              />
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                {isCheckingFace && (
+                  <div className="flex items-center gap-1.5 text-xs text-blue-400">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Detecting face...</span>
+                  </div>
+                )}
+                {faceDetected === true && !isCheckingFace && (
+                  <div className="flex items-center gap-1.5 text-xs text-green-400">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Face detected</span>
+                  </div>
+                )}
+                {faceDetected === false && !isCheckingFace && (
+                  <div className="flex items-center gap-1.5 text-xs text-red-400">
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span>No face!</span>
+                  </div>
+                )}
+              </div>
+            </div>
             {errors.imageFile && <p id="student-image-error" className="text-red-400 text-xs mt-1">{errors.imageFile}</p>}
           </div>
 
